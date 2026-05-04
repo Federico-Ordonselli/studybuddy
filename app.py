@@ -25,6 +25,7 @@ from core.library import (
 from core.llm import LLMClient, list_ollama_models
 from core.obsidian import export_vault
 from core.processor import process_file, process_group
+from core import rag
 from core.readers import (
     HTML_EXTS,
     PDF_EXTS,
@@ -253,6 +254,7 @@ MODES = [
     ("📚 Biblioteca", "library"),
     ("🔎 Cerca", "search"),
     ("🔗 Cross-reference", "xref"),
+    ("💬 Chiedi al corso", "rag"),
     ("🎴 Ripasso", "review"),
     ("📝 Export Obsidian", "obsidian"),
     ("💪 Anki esterno", "anki_ext"),
@@ -828,6 +830,100 @@ elif mode_key == "xref":
                 with st.expander(f"**{term}** — {len(locations)} occorrenze"):
                     for loc in locations:
                         st.markdown(f"- {loc['modulo']} › {loc['sottomodulo']} › *{loc['item']}*")
+
+# ===========================================================================
+# MODALITÀ: CHIEDI AL CORSO (RAG)
+# ===========================================================================
+elif mode_key == "rag":
+    hero("💬 Chiedi al corso", "Domande in linguaggio naturale sui tuoi materiali, con citazione delle fonti.")
+    llm_cfg = llm_sidebar_config()
+
+    corsi = list_corsi(OUTPUT_DIR)
+    if not corsi:
+        st.warning("Non hai ancora elaborato nessun corso. Vai in **📁 Cartella inputs** per iniziare.")
+    else:
+        corso = st.selectbox("Corso", corsi, key="rag_corso")
+
+        stats = rag.get_index_stats(OUTPUT_DIR, corso)
+
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            if stats:
+                st.success(
+                    f"✅ Indice presente: **{stats['chunks']} chunk** indicizzati "
+                    f"(modello: `{stats['metadata'].get('embedding_model', 'n/d')}`)"
+                )
+            else:
+                st.info("⚠️ Indice non ancora creato per questo corso. Clicca su **Indicizza** per crearlo.")
+        with col_b:
+            btn_label = "🔄 Reindicizza" if stats else "📚 Indicizza"
+            if st.button(btn_label, use_container_width=True, type="primary"):
+                progress = st.progress(0.0)
+                status = st.empty()
+
+                def _progress(done: int, total: int) -> None:
+                    progress.progress(done / max(1, total))
+                    status.info(f"Indicizzo: {done}/{total} chunk")
+
+                try:
+                    with st.spinner("Costruzione dell'indice in corso..."):
+                        result = rag.index_corso(OUTPUT_DIR, corso, progress_callback=_progress)
+                    progress.empty()
+                    status.empty()
+                    st.success(
+                        f"✅ Indicizzati **{result['chunks_indexed']} chunk** "
+                        f"da **{result['documents']} documenti**. "
+                        f"({result['errors']} errori)"
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Errore durante l'indicizzazione: {e}")
+
+        st.divider()
+
+        if stats:
+            section("FAI UNA DOMANDA")
+            query = st.text_area(
+                "Domanda",
+                placeholder="Es. Spiegami il CALCULATE in DAX. Quando si usa? Quali sono i casi tipici?",
+                height=100,
+                key="rag_query",
+            )
+            col_q1, col_q2 = st.columns([3, 1])
+            with col_q2:
+                top_k = st.number_input("Frammenti", min_value=3, max_value=10, value=5, key="rag_top_k")
+
+            if st.button("🚀 Chiedi", type="primary", disabled=not query.strip()):
+                with st.spinner("Recupero frammenti rilevanti e genero la risposta..."):
+                    try:
+                        result = rag.answer_with_rag(
+                            outputs_root=OUTPUT_DIR,
+                            corso=corso,
+                            query=query.strip(),
+                            llm_model=llm_cfg["model"],
+                            top_k=int(top_k),
+                            language=llm_cfg.get("language", "italiano"),
+                        )
+                    except Exception as e:
+                        st.error(f"Errore durante la generazione: {e}")
+                        result = None
+
+                if result:
+                    st.divider()
+                    section("RISPOSTA")
+                    st.markdown(result["answer"])
+
+                    st.divider()
+                    section(f"FRAMMENTI USATI ({result['n_retrieved']})")
+                    for i, rc in enumerate(result["retrieved"], 1):
+                        meta = rc.metadata
+                        with st.expander(
+                            f"#{i} · {meta.get('modulo', '?')} / {meta.get('sottomodulo', '?')} / "
+                            f"{meta.get('item', '?')} · similarity {rc.similarity:.2f} · "
+                            f"({meta.get('source_type', '?')})",
+                            expanded=False,
+                        ):
+                            st.code(rc.text, language="markdown")
 
 
 # ===========================================================================

@@ -4,3 +4,4 @@ ollama>=0.3.3
 pandas>=2.0
 pypdf>=4.0
 beautifulsoup4>=4.12
+chromadb>=0.4.22
