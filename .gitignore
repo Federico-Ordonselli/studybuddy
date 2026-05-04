@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# User data (mai pubblicare)
+inputs/
+outputs/
+uploads_tmp/
+coursera_videos/
+archived/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit secrets (se mai aggiunti in futuro)
+.streamlit/secrets.toml
+
+# Environment files
+.env
+.env.local
+
+# Logs
+*.log

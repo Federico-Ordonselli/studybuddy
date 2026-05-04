@@ -1,0 +1,1 @@
+"""StudyBuddy core package."""

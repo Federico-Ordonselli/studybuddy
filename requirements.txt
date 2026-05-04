@@ -1,0 +1,6 @@
+streamlit>=1.32
+faster-whisper>=1.0.3
+ollama>=0.3.3
+pandas>=2.0
+pypdf>=4.0
+beautifulsoup4>=4.12
