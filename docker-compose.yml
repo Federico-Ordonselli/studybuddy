@@ -1,0 +1,59 @@
+services:
+  # ---------------------------------------------------------------
+  # Ollama: server LLM locale con supporto GPU NVIDIA
+  # Esposto su porta 11435 (per evitare conflitto con Ollama nativo)
+  # ---------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: studybuddy-ollama
+    restart: unless-stopped
+    ports:
+      - "11435:11434"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - studybuddy-net
+
+  # ---------------------------------------------------------------
+  # StudyBuddy: app Streamlit
+  # ---------------------------------------------------------------
+  studybuddy:
+    build: .
+    container_name: studybuddy-app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - ./inputs:/app/inputs
+      - ./outputs:/app/outputs
+      - ./uploads_tmp:/app/uploads_tmp
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      - ollama
+    networks:
+      - studybuddy-net
+
+networks:
+  studybuddy-net:
+    driver: bridge
+
+volumes:
+  ollama_data:
+    name: studybuddy-ollama-data

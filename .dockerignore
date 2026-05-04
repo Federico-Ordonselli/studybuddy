@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+env
+
+# User data (montati come volumi a runtime, non incorporati nell'immagine)
+inputs
+outputs
+uploads_tmp
+coursera_videos
+archived
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker stesso
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentazione
+README.md
+LICENSE
+
+# Logs
+*.log

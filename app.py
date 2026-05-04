@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -31,6 +32,7 @@ from core.readers import (
     VIDEO_EXTS,
     InputFile,
     group_by_folder,
+    find_companion_text,
     read_html,
     read_pdf,
     read_text,
@@ -85,7 +87,7 @@ def save_result(dir_path: Path, result: dict, text: str | None = None) -> None:
         )
 
 
-def read_input_file(inp: InputFile, transcriber_getter) -> str:
+def read_input_file(inp: InputFile, transcriber_getter, skip_video_transcription: bool = False) -> str:
     if inp.kind == "text":
         return read_text(inp.path)
     if inp.kind == "pdf":
@@ -93,6 +95,13 @@ def read_input_file(inp: InputFile, transcriber_getter) -> str:
     if inp.kind == "html":
         return read_html(inp.path)
     if inp.kind == "media":
+        if skip_video_transcription:
+            companion = find_companion_text(inp.path)
+            if companion:
+                return read_text(companion)
+            raise FileNotFoundError(
+                f"Trascrizione disabilitata e nessun .txt accanto a {inp.path.name}"
+            )
         t = transcriber_getter()
         return t.transcribe(str(inp.path))
     raise ValueError(f"Tipo non gestito: {inp.kind}")
@@ -281,11 +290,22 @@ def llm_sidebar_config() -> dict:
 
 def whisper_sidebar_config() -> dict:
     with st.sidebar.expander("🎙️ Whisper (per media)", expanded=False):
-        whisper_size = st.selectbox("Modello Whisper", ["tiny", "base", "small", "medium", "large-v3"], index=3)
-        whisper_device = st.selectbox("Device", ["cuda", "cpu"], index=0)
-        whisper_compute = st.selectbox("Compute type", ["float16", "int8_float16", "int8", "float32"], index=0)
-        whisper_language = st.text_input("Lingua media", value="en")
-    return {"size": whisper_size, "device": whisper_device, "compute": whisper_compute, "language": whisper_language}
+        skip_transcription = st.checkbox(
+            "⚡ Salta trascrizione video",
+            value=False,
+            help="Se attivo, i video verranno saltati a meno che non esista un .txt o .md con lo stesso nome accanto al video. Utile se hai già le trascrizioni disponibili."
+        )
+        whisper_size = st.selectbox("Modello Whisper", ["tiny", "base", "small", "medium", "large-v3"], index=3, disabled=skip_transcription)
+        whisper_device = st.selectbox("Device", ["cuda", "cpu"], index=0, disabled=skip_transcription)
+        whisper_compute = st.selectbox("Compute type", ["float16", "int8_float16", "int8", "float32"], index=0, disabled=skip_transcription)
+        whisper_language = st.text_input("Lingua media", value="en", disabled=skip_transcription)
+    return {
+        "size": whisper_size,
+        "device": whisper_device,
+        "compute": whisper_compute,
+        "language": whisper_language,
+        "skip_transcription": skip_transcription,
+    }
 
 
 def generation_sidebar_config() -> dict:
@@ -450,7 +470,10 @@ elif mode_key == "new":
             ext = save_path.suffix.lower()
             try:
                 if ext in VIDEO_EXTS:
-                    status.info(f"🎙️ Trascrivo {f.name}…")
+                    if whisper_cfg.get("skip_transcription", False):
+                        st.error("Trascrizione video disabilitata in sidebar. Carica direttamente il .txt o disabilita lo skip.")
+                        st.stop()
+                    status.info("🎙️ Trascrivo l'audio…")
                     text = get_transcriber().transcribe(str(save_path), language=whisper_cfg["language"] or None)
                 elif ext in TEXT_EXTS:
                     text = read_text(save_path)
@@ -605,6 +628,19 @@ elif mode_key == "inputs":
         progress = st.progress(0.0)
         status = st.empty()
         done_count = skip_count = err_count = 0
+        eta_box = st.empty()
+        file_times: list[float] = []
+        batch_start = time.time()
+        # Conta totale file da elaborare (esclusi i già fatti se skip_done attivo)
+        total_files = 0
+        for folder_rel in selected_folders:
+            for inp in by_folder[folder_rel]:
+                stem = Path(inp.path.name).stem
+                c, m, s = interpret(folder_rel)
+                if skip_done and per_file and item_already_processed(OUTPUT_DIR, c, m, s, stem):
+                    continue
+                total_files += 1
+        files_processed = 0
 
         for fi, folder_rel in enumerate(selected_folders):
             files = by_folder[folder_rel]
@@ -619,8 +655,15 @@ elif mode_key == "inputs":
                     continue
                 try:
                     status.info(f"📖 Leggo: {inp.rel_path}")
-                    txt = read_input_file(inp, get_transcriber)
+                    txt = read_input_file(
+                        inp,
+                        get_transcriber,
+                        skip_video_transcription=whisper_cfg.get("skip_transcription", False),
+                    )
                     file_texts.append((inp.path.name, txt))
+                except FileNotFoundError as e:
+                    st.warning(f"⏭️ Saltato {inp.rel_path}: {e}")
+                    skip_count += 1
                 except Exception as e:  # noqa: BLE001
                     st.error(f"❌ Lettura {inp.rel_path}: {e}")
                     err_count += 1
@@ -628,6 +671,7 @@ elif mode_key == "inputs":
             if per_file:
                 for name, text in file_texts:
                     stem = Path(name).stem
+                    file_start = time.time()  # +
                     try:
                         status.info(f"⚙️ Elaboro: {name}")
                         result = process_file(
@@ -642,7 +686,23 @@ elif mode_key == "inputs":
                         )
                         save_result(build_path(OUTPUT_DIR, c, m, s, stem), result, text=text)
                         done_count += 1
-                    except Exception as e:  # noqa: BLE001
+                        # +++ Aggiornamento ETA +++
+                        elapsed = time.time() - file_start
+                        file_times.append(elapsed)
+                        files_processed += 1
+                        avg = sum(file_times) / len(file_times)
+                        remaining = max(0, total_files - files_processed)
+                        eta_seconds = avg * remaining
+                        total_elapsed = time.time() - batch_start
+                        eta_box.info(
+                            f"⏱️ {files_processed}/{total_files} · "
+                            f"medio {avg:.0f}s/file · "
+                            f"trascorso {total_elapsed/60:.1f}m · "
+                            f"rimangono ~{eta_seconds/60:.1f}m · "
+                            f"fine ~{datetime.now().replace(microsecond=0).strftime('%H:%M')} + {eta_seconds/60:.0f}m"
+                        )
+                        # +++ Fine ETA +++
+                    except Exception as e:
                         st.error(f"❌ {name}: {e}")
                         err_count += 1
 

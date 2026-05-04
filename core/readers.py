@@ -148,3 +148,18 @@ def group_by_folder(files: list[InputFile]) -> dict[Path, list[InputFile]]:
 
 def list_folders(files: list[InputFile]) -> list[Path]:
     return sorted({f.rel_path.parent for f in files})
+
+
+def find_companion_text(video_path: Path) -> Path | None:
+    """Cerca un file .txt o .md con lo stesso nome base del video.
+
+    Esempio: video '01_intro.mp4' → cerca '01_intro.txt' nella stessa cartella.
+    Restituisce None se non trovato.
+    """
+    stem = video_path.stem
+    parent = video_path.parent
+    for ext in (".txt", ".md", ".markdown"):
+        candidate = parent / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
